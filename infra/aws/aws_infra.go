@@ -41,8 +41,8 @@ var (
 	clientEC2 *ec2.Client
 	userdata  = `
 dnf update && dnf install -y wget unzip
-wget https://github.com/pogzyb/hide/releases/download/0.1.0/hide.zip
-
+wget https://github.com/pogzyb/hide/releases/download/0.1.0/hide-binary.zip -O hide-binary.zip
+unzip hide-binary.zip
 ./hide serve --port 8181
 `
 	defaultTags = []types.Tag{

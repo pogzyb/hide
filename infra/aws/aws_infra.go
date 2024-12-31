@@ -39,12 +39,11 @@ func NewProvider(ctx context.Context, ipAddr, vpcId, subnetId string) (*AWSProvi
 
 var (
 	clientEC2 *ec2.Client
-	userdata  = `
-dnf update && dnf install -y wget unzip
-wget https://github.com/pogzyb/hide/releases/download/0.1.0/hide-binary.zip -O hide-binary.zip
-unzip hide-binary.zip
-./hide serve --port 8181
-`
+	userdata  = `#!/bin/bash
+cd /home/ec2-user
+wget https://github.com/pogzyb/hide/releases/download/0.1.0a/hide
+chmod u+x ./hide
+./hide serve --port 8181`
 	defaultTags = []types.Tag{
 		{Key: aws.String("CreatedBy"), Value: aws.String("hide-proxy")},
 	}
@@ -242,7 +241,7 @@ func createEC2(ctx context.Context, securityGroupId string, subnetId *string) (*
 	if err != nil {
 		return nil, err
 	}
-	b64userdata := base64.RawStdEncoding.EncodeToString([]byte(userdata))
+	b64userdata := base64.StdEncoding.EncodeToString([]byte(userdata))
 	return clientEC2.RunInstances(ctx, &ec2.RunInstancesInput{
 		MaxCount:         aws.Int32(1),
 		MinCount:         aws.Int32(1),
@@ -300,7 +299,7 @@ func deleteEC2(ctx context.Context) error {
 		return err
 	}
 	for _, instanceId := range instanceIds {
-		ctxInner, cancel := context.WithDeadline(ctx, time.Now().Add(time.Minute * 5))
+		ctxInner, cancel := context.WithDeadline(ctx, time.Now().Add(time.Minute*5))
 		err = waitForEC2State(ctxInner, instanceId, 48)
 		cancel()
 		if err != nil {
@@ -323,14 +322,14 @@ func getEC2PublicDnsName(ctx context.Context, instanceId string) (string, error)
 			dnsName = *inst.PublicDnsName
 		}
 	}
-	return dnsName, nil 
+	return dnsName, nil
 }
 
 func waitForEC2State(ctx context.Context, instanceId string, stateCode int32) error {
 	var currentCode int32
 	for currentCode != stateCode {
 		resp, err := clientEC2.DescribeInstanceStatus(ctx, &ec2.DescribeInstanceStatusInput{
-			InstanceIds: []string{instanceId},
+			InstanceIds:         []string{instanceId},
 			IncludeAllInstances: aws.Bool(true),
 		})
 		if err != nil {

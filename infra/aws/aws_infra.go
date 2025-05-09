@@ -46,7 +46,7 @@ var (
 	clientR53 *route53.Client
 	userdata  = `#!/bin/bash
 cd /home/ec2-user
-wget https://github.com/pogzyb/hide/releases/download/0.1.0a/hide
+wget https://github.com/pogzyb/hide/releases/download/0.1.0/hide
 chmod u+x ./hide
 ./hide serve --port 8181`
 	defaultTags = []types.Tag{

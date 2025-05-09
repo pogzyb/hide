@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
+	r53Types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/rs/zerolog/log"
 
 	"github.com/pogzyb/hide/infra"
@@ -19,9 +21,10 @@ type AWSProvider struct {
 	IpAddr         string
 	VpcId          string
 	PublicSubnetId string
+	HostedZone string
 }
 
-func NewProvider(ctx context.Context, ipAddr, vpcId, subnetId string) (*AWSProvider, error) {
+func NewProvider(ctx context.Context, ipAddr, vpcId, subnetId, hostedZone string) (*AWSProvider, error) {
 	if vpcId == "" {
 		var err error
 		vpcId, err = getDefaultVpc(ctx)
@@ -34,11 +37,13 @@ func NewProvider(ctx context.Context, ipAddr, vpcId, subnetId string) (*AWSProvi
 		IpAddr:         ipAddr,
 		VpcId:          vpcId,
 		PublicSubnetId: subnetId,
+		HostedZone: hostedZone,
 	}, nil
 }
 
 var (
 	clientEC2 *ec2.Client
+	clientR53 *route53.Client
 	userdata  = `#!/bin/bash
 cd /home/ec2-user
 wget https://github.com/pogzyb/hide/releases/download/0.1.0a/hide
@@ -55,6 +60,7 @@ func init() {
 		log.Fatal().Msgf("could not get ec2 client: %v", err)
 	}
 	clientEC2 = ec2.NewFromConfig(cfg)
+	clientR53 = route53.NewFromConfig(cfg)
 }
 
 func (pr *AWSProvider) Deploy(ctx context.Context) (*infra.HideInstanceInfo, error) {
@@ -72,13 +78,26 @@ func (pr *AWSProvider) Deploy(ctx context.Context) (*infra.HideInstanceInfo, err
 	if err != nil {
 		return nil, err
 	}
-	hostname, err := getEC2PublicDnsName(ctx, instanceId)
+	hostname, ipv4, err := getEC2PublicDnsName(ctx, instanceId)
 	if err != nil {
 		return nil, err
 	}
 	info := &infra.HideInstanceInfo{
-		Hostname: hostname,
+		InstanceHostname: hostname,
+		InstanceIPv4: ipv4,
 		UID:      instanceId,
+	}
+	if pr.HostedZone != "" {
+		hzId, err := getHostedZone(ctx, pr.HostedZone)
+		log.Info().Msgf("hzid: %s", hzId)
+		if err != nil {
+			return nil, err
+		}
+		record := fmt.Sprintf("my.%v", pr.HostedZone)
+		if err = updateR53Record(ctx, "create", hzId, record, ipv4); err != nil {
+			return nil, err
+		}
+		info.DNSName = record
 	}
 	return info, nil
 }
@@ -88,6 +107,16 @@ func (pr *AWSProvider) Destroy(ctx context.Context) error {
 		return err
 	}
 	time.Sleep(time.Second * 3)
+	if pr.HostedZone != "" {
+		hzId, err := getHostedZone(ctx, pr.HostedZone)
+		if err != nil {
+			return err
+		}
+		record := fmt.Sprintf("my.%v", pr.HostedZone)
+		if err = updateR53Record(ctx, "delete", hzId, record, ""); err != nil {
+			return err
+		}
+	}
 	return deleteSecurityGroup(ctx)
 }
 
@@ -309,20 +338,22 @@ func deleteEC2(ctx context.Context) error {
 	return err
 }
 
-func getEC2PublicDnsName(ctx context.Context, instanceId string) (string, error) {
+func getEC2PublicDnsName(ctx context.Context, instanceId string) (string, string, error) {
 	resp, err := clientEC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceId},
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var dnsName string
+	var ipV4 string
 	for _, res := range resp.Reservations {
 		for _, inst := range res.Instances {
 			dnsName = *inst.PublicDnsName
+			ipV4 = *inst.PublicIpAddress
 		}
 	}
-	return dnsName, nil
+	return dnsName, ipV4, nil
 }
 
 func waitForEC2State(ctx context.Context, instanceId string, stateCode int32) error {
@@ -342,4 +373,54 @@ func waitForEC2State(ctx context.Context, instanceId string, stateCode int32) er
 		time.Sleep(time.Second * 5)
 	}
 	return nil
+}
+
+func getHostedZone(ctx context.Context, domain string) (string, error) {
+	resp, err := clientR53.ListHostedZonesByName(
+		ctx, 
+		&route53.ListHostedZonesByNameInput{
+			DNSName: aws.String(domain),
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.HostedZones) == 0 {
+		return "", fmt.Errorf("could not get hosted zone: %s err: %v", domain, err)
+	}
+	return *resp.HostedZones[0].Id, nil
+}
+
+func updateR53Record(ctx context.Context, action, hostedZoneId, recordName, ec2Ip string) error {
+	var r53Action r53Types.ChangeAction
+	switch action {
+	case "create":
+		r53Action = r53Types.ChangeActionCreate
+	case "delete":
+		r53Action = r53Types.ChangeActionDelete
+	default:
+		return fmt.Errorf("no such action: %s", action)
+	}
+	_, err := clientR53.ChangeResourceRecordSets(
+		ctx, 
+		&route53.ChangeResourceRecordSetsInput{
+			HostedZoneId: aws.String(hostedZoneId),
+			ChangeBatch: &r53Types.ChangeBatch{
+				Changes: []r53Types.Change{
+					{
+						Action: r53Action,
+						ResourceRecordSet: &r53Types.ResourceRecordSet{
+							Name: aws.String(recordName),
+							Type: r53Types.RRTypeA,
+							ResourceRecords: []r53Types.ResourceRecord{
+								{Value: &ec2Ip},
+							},
+							TTL: aws.Int64(900),
+						},
+					},
+				},
+			},
+		},
+	)
+	return err
 }

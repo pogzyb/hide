@@ -31,7 +31,7 @@ func init() {
 }
 
 func destroyAWS(ctx context.Context) {
-	provider, err := aws.NewProvider(ctx, "", "", "")
+	provider, err := aws.NewProvider(ctx, "", "", "", "")
 	if err != nil {
 		log.Fatal().Msgf("could not get provider: %v", err)
 	}

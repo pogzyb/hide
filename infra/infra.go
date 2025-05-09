@@ -9,6 +9,8 @@ type Provider interface {
 }
 
 type HideInstanceInfo struct {
-	Hostname string
+	DNSName string
+	InstanceHostname string
+	InstanceIPv4 string
 	UID string
 }

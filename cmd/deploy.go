@@ -28,6 +28,7 @@ var (
 
 	awsVpcId    string
 	awsSubnetId string
+	awsHostedZone string
 )
 
 func init() {
@@ -37,11 +38,12 @@ func init() {
 
 	commandDeployAWS.Flags().StringVar(&awsVpcId, "vpcId", "", "The Id of VPC where the Hide Proxy EC2 will be launched.")
 	commandDeployAWS.Flags().StringVar(&awsSubnetId, "subnetId", "", "The Id of Public Subnet where the Hide Proxy EC2 will be launched.")
+	commandDeployAWS.Flags().StringVar(&awsHostedZone, "hostedZone", "", "The name of your Hosted Zone.")
 	commandDeploy.AddCommand(commandDeployAWS)
 }
 
 func deployAWS(ctx context.Context) {
-	provider, err := aws.NewProvider(ctx, ipAddr, awsVpcId, awsSubnetId)
+	provider, err := aws.NewProvider(ctx, ipAddr, awsVpcId, awsSubnetId, awsHostedZone)
 	if err != nil {
 		log.Fatal().Msgf("could not get provider: %v", err)
 	}
@@ -49,5 +51,5 @@ func deployAWS(ctx context.Context) {
 	if err != nil {
 		log.Fatal().Msgf("could not deploy: %v", err)
 	}
-	log.Info().Msgf("hostname: %s", info.Hostname)
+	log.Info().Msgf("hostname: %s", info.InstanceHostname)
 }
